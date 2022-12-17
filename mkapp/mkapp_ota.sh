@@ -3,6 +3,18 @@
 ROOT_DIR=$PWD
 SYS_PARTITION=${ROOT_DIR}/image/sys_partition_nor.fex
 
+function bin_dir() 
+{
+	local BIN_DIR="${ROOT_DIR}/bin"
+	arch=$(uname -i)
+	if [ "$arch" = "x86_64" ]; then
+    		arch=""
+	else
+    		arch="_$arch"
+	fi
+	echo "${ROOT_DIR}/bin${arch}"
+}
+
 function envsetup()
 {
     if [ "x$SHELL" != "x/bin/bash" ]; then
@@ -33,7 +45,7 @@ function print_green()
 
 function make_img_md5() 
 {
-	local BIN_DIR=$ROOT_DIR/bin
+	local BIN_DIR=$(bin_dir)
 
     #$1: target image
     ${BIN_DIR}/md5sum $1 | awk '{print $1}' > $1.md5
@@ -42,7 +54,7 @@ function make_img_md5()
 function make_app_res()
 {
 	local APP_PART_NAME=app
-	local BIN_DIR=$ROOT_DIR/bin
+	local BIN_DIR=$(bin_dir)
 	local IMG_DIR=$ROOT_DIR/image
 
 	cd ${ROOT_DIR}/image
