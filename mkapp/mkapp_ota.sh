@@ -5,8 +5,7 @@ SYS_PARTITION=${ROOT_DIR}/image/sys_partition_nor.fex
 
 function bin_dir() 
 {
-	local BIN_DIR="${ROOT_DIR}/bin"
-	arch=$(uname -i)
+	arch=$(uname -p)
 	if [ "$arch" = "x86_64" ]; then
     		arch=""
 	else
