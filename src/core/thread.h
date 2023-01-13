@@ -2,6 +2,7 @@
 #define _THREAD_H
 
 #include <stdint.h>
+#include <pthread.h>
 
 #define THREAD_COUNT_MAX (10)
 #define THREAD_COUNT (4)
@@ -14,5 +15,4 @@ typedef struct {
 } threads_obj_t;
 
 int create_threads();
-void *thread_dialpad(void *ptr);
 #endif

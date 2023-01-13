@@ -1,47 +1,54 @@
+#include "thread.h"
+
+#include <assert.h>
 #include <pthread.h>
-#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <assert.h>
+#include <sys/stat.h>
 #include <sys/vfs.h>
+#include <unistd.h>
 
-#include "defines.h"
-#include "thread.h"
-#include "osd.h"
-#include "input_device.h"
-#include "ht.h"
+#include <log/log.h>
+
 #include "common.hh"
-#include "../driver/porting.h"
+#include "defines.h"
+#include "ht.h"
+#include "input_device.h"
+#include "msp_displayport.h"
+#include "osd.h"
+
+#include "../driver/dm5680.h"
+#include "../driver/hardware.h"
+#include "../driver/it66021.h"
+#include "../driver/it66021.h"
 #include "../driver/mcp3021.h"
 #include "../driver/nct75.h"
-#include "../driver/hardware.h"
 #include "../driver/oled.h"
-#include "../driver/dm5680.h"
-#include "../driver/it66021.h"
-#include "../driver/it66021.h"
-#include "../page/page_fans.h"
-#include "../page/page_version.h"
-#include "msp_displayport.h"
+#include "ui/ui_porting.h"
+#include "ui/page_fans.h"
+#include "ui/page_version.h"
 
 
 ///////////////////////////////////////////////////////////////////////////////
 // SD card exist
 static void detect_sdcard(void)
 {
-	char   buf[128]; 
-	FILE   *stream;  
 	static bool sdcard_enable_last = false;
+	struct stat mountpoint;
+	struct stat mountpoint_parent;
 
-    memset( buf, '\0', sizeof(buf) );
-    stream = popen( "ls /mnt/extsd/" , "r" );
-	fread( buf, sizeof(char), sizeof(buf),  stream);  
-	pclose( stream ); 
-
-	g_sdcard_enable = strcmp(buf, "") == 0 ? false : true;
+	// fetch mountpoint and mountpoint parent dev_id
+	if (stat("/mnt/extsd", &mountpoint) == 0 &&
+		stat("/mnt", &mountpoint_parent) == 0) {
+		// iff the dev ids _do not_ match there is a filesystem mounted
+		g_sdcard_enable = mountpoint.st_dev != mountpoint_parent.st_dev;
+	} else {
+		g_sdcard_enable = false;
+	}
 
 	if((g_sdcard_enable && !sdcard_enable_last) || g_sdcard_det_req) {
 		struct statfs info;
-		if(statfs( "/mnt/extsd", &info ) != -1) 
+		if(statfs( "/mnt/extsd", &info ) == 0) 
 			g_sdcard_size = (info.f_bsize * info.f_bavail)>>20; //in MB
 		else
 			g_sdcard_size = 0;
@@ -66,21 +73,6 @@ static void *thread_imu(void *ptr)
 	return NULL;
 }
 
-void *thread_dialpad(void *ptr)
-{
-	for(;;)
-	{
-		input_device_loop();
-		if(!g_init_done) {
-			pthread_mutex_lock(&lvgl_mutex);
-			lv_timer_handler();
-			pthread_mutex_unlock(&lvgl_mutex);
-		}
-	}
-	return NULL;
-}
-
-
 ///////////////////////////////////////////////////////////////////////////////
 // Signal loss|accquire processing
 #define SIGNAL_LOSS_DURATION_THR  20 //25=4 seconds, 
@@ -90,8 +82,8 @@ static void check_hdzero_signal(int vtmg_change)
 	static uint8_t cnt = 0;
 	uint8_t is_valid;
 
-	//HDZero digital 
-	if(g_source_info.source == 0) {
+	//HDZero digital
+	if(g_source_info.source == SOURCE_HDZERO) {
 		DM5680_req_rssi();
 		DM5680_req_vldflg();
 		tune_channel_timer();
@@ -100,26 +92,26 @@ static void check_hdzero_signal(int vtmg_change)
 	if(g_setting.record.mode_manual || !g_sdcard_enable || (g_menu_op != OPLEVEL_VIDEO)) return;
 
 	//exit if HDMI in
-	if(g_source_info.source == 1) return; 
+	if(g_source_info.source == SOURCE_HDMI_IN) return;
 
 	//Analog VTMG change -> Restart recording
-	if(g_source_info.source >= 2) {
+	if(g_source_info.source >= SOURCE_AV_IN) {
 		if(vtmg_change && is_recording) {
-			Printf("AV VTMG change\n");
+			LOGI("AV VTMG change");
 			rbtn_click(1,1);
 			rbtn_click(1,2);
 		}
 	}
 
 	//HDZero VTMG change -> stop recording first
-	if((g_source_info.source == 0) && vtmg_change) {
-		Printf("HDZero VTMG change\n");
+	if((g_source_info.source == SOURCE_HDZERO) && vtmg_change) {
+		LOGI("HDZero VTMG change\n");
 		rbtn_click(1,1);
 		cnt = 0;
 	}
 
-	is_valid = (g_source_info.source == 2)? g_source_info.av_in_status: \
-			   (g_source_info.source == 3)? g_source_info.av_bay_status: \
+	is_valid = (g_source_info.source == SOURCE_AV_IN)? g_source_info.av_in_status: \
+			   (g_source_info.source == SOURCE_EXPANSION)? g_source_info.av_bay_status: \
 			   								(rx_status[0].rx_valid || rx_status[1].rx_valid);
 	
 	if(is_recording) { //in-recording
@@ -127,7 +119,7 @@ static void check_hdzero_signal(int vtmg_change)
 			cnt++;
 			if(cnt >= SIGNAL_LOSS_DURATION_THR) {
 				cnt = 0;
-				Printf("Signal lost\n");
+				LOGI("Signal lost");
 				rbtn_click(1,1);
 			}
 		}
@@ -139,7 +131,7 @@ static void check_hdzero_signal(int vtmg_change)
 			cnt++;
 			if(cnt >= SIGNAL_ACCQ_DURATION_THR) {
 				cnt = 0;
-				Printf("Signal accquired\n");
+				LOGI("Signal accquired");
 				rbtn_click(1,2);
 			}
 		}
@@ -165,7 +157,7 @@ static void *thread_peripheral(void *ptr)
 				k = 0;
 				g_battery.voltage = mcp_read_vatage();
 				g_temperature.top = nct_read_temperature(NCT_TOP);
-				g_temperature.left = nct_read_temperature(NCT_LEFT);
+				g_temperature.left = nct_read_temperature(NCT_LEFT) + 100; 
 				g_temperature.right= nct_read_temperature(NCT_RIGHT);
 				confirm_recording();
 			}

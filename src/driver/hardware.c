@@ -1,11 +1,15 @@
+#include "hardware.h"
+
 #include <stdint.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <pthread.h>
+
+#include <log/log.h>
+
 #include "i2c.h"
 #include "uart.h"
-#include "hardware.h"
 #include "dm6302.h"
 #include "oled.h"
 #include "TP2825.h"
@@ -15,6 +19,7 @@
 #include "it66021.h"
 #include "../core/osd.h"
 #include "../core/common.hh"
+
 /////////////////////////////////////////////////////////////////////////
 // global
 hw_status_t g_hw_stat;
@@ -35,6 +40,7 @@ void hw_stat_init()
     g_hw_stat.av_valid[0] = g_hw_stat.av_valid[1] = 0;
 
     g_hw_stat.hdmiin_valid = 0;
+    g_hw_stat.hdmiin_vtmg = 0;
 
     pthread_mutex_init(&hardware_mutex, NULL);
 }
@@ -67,10 +73,11 @@ void Display_UI_init()
     g_hw_stat.vdpo_tmg = HW_VDPO_1080P50;
     Display_VO_SWITCH(0);
     
-    I2C_Write(ADDR_FPGA, 0x8d, 0x10);
-    I2C_Write(ADDR_FPGA, 0x8e, 0x00); 
+    I2C_Write(ADDR_FPGA, 0x8d, 0x14);
+    I2C_Write(ADDR_FPGA, 0x8e, 0x80); 
     I2C_Write(ADDR_AL, 0x14, 0x00);
     I2C_Write(ADDR_FPGA, 0x80, 0x00);
+    I2C_Write(ADDR_FPGA, 0x84, 0x11);
 
     OLED_SetTMG(0);
 }
@@ -118,8 +125,8 @@ void Display_720P90_t(int mode)
     g_hw_stat.vdpo_tmg = HW_VDPO_720P90;
     I2C_Write(ADDR_FPGA, 0x8d, 0x10);
     I2C_Write(ADDR_FPGA, 0x8e, 0x00); 
-    I2C_Write(ADDR_AL, 0x14, 0x00);
-    I2C_Write(ADDR_FPGA, 0x80, 0x01);
+    I2C_Write(ADDR_AL, 0x14, 0x01);
+    I2C_Write(ADDR_FPGA, 0x80, 0x03);
 
     DM5680_SetFPS(mode);
     MFPGA_Set720P90(mode);
@@ -154,7 +161,7 @@ void HDZero_open()
 		g_hw_stat.hdzero_open = 1;
 	}
 
-    Printf("HDZero: open\n");
+    LOGI("HDZero: open");
 }
 
 void HDZero_Close()
@@ -164,7 +171,7 @@ void HDZero_Close()
     g_hw_stat.hdzero_open = 0;
     g_hw_stat.m0_open = 0;
 
-    Printf("HDZero: close\n");
+    LOGI("HDZero: close");
 }
 
 void AV_Mode_Switch_fpga(int is_pal)
@@ -200,7 +207,7 @@ void Source_AV(uint8_t sel) // 0=AV in, 1=AV module
     I2C_Write(ADDR_FPGA, 0x8C, 0x00);
     
     g_hw_stat.av_chid = sel;
-    g_hw_stat.av_pal = (g_hw_stat.av_valid[sel] == 2) ? 1 : 0;
+    g_hw_stat.av_pal = 0; //(g_hw_stat.av_valid[sel] == 2) ? 1 : 0;
     TP2825_Config(sel, g_hw_stat.av_pal);
     AV_Mode_Switch_fpga(g_hw_stat.av_pal);
 
@@ -226,7 +233,7 @@ void Source_HDMI_in()
     OLED_display(0);
     I2C_Write(ADDR_FPGA, 0x8C, 0x00);
 
-    I2C_Write(ADDR_FPGA, 0x8d, 0x00);
+    I2C_Write(ADDR_FPGA, 0x8d, 0x10);
     I2C_Write(ADDR_FPGA, 0x8e, 0x00);
     I2C_Write(ADDR_AL, 0x14, 0x01);
 
@@ -234,6 +241,7 @@ void Source_HDMI_in()
     //OLED_SetTMG(0);
 
     I2C_Write(ADDR_FPGA, 0x8C, 0x04);
+    I2C_Write(ADDR_FPGA, 0x84, 0x00);
 
     g_hw_stat.source_mode = HW_SRC_MODE_HDMIIN;
     Display_VO_SWITCH(1);
@@ -253,7 +261,7 @@ int HDZERO_detect() // return = 1: vtmg to V536 changed
     if(g_hw_stat.source_mode == HW_SRC_MODE_HDZERO) {
 
         if(cam_mode_last != CAM_MODE){ //Camera mode changed
-            Printf("CAM_mode: %d->%d\n", cam_mode_last,CAM_MODE);
+            LOGI("CAM_mode: %d->%d", cam_mode_last,CAM_MODE);
             cam_mode_last = CAM_MODE;
 
             // 1. Change fps
@@ -271,7 +279,7 @@ int HDZERO_detect() // return = 1: vtmg to V536 changed
                     Display_720P90_t(CAM_MODE);
                     break;
                 default:
-                    Printf("cam_mode =%d not suppored!!\n ",CAM_MODE);
+                    LOGW("cam_mode =%d not suppored!!\n ",CAM_MODE);
                     break;
             }
 
@@ -279,7 +287,7 @@ int HDZERO_detect() // return = 1: vtmg to V536 changed
         }
 
         if(cam_4_3_last != cam_4_3) {
-            Printf("cam_4_3: %d  CAM_MODE=%d\n", cam_4_3, CAM_MODE);
+            LOGI("cam_4_3: %d  CAM_MODE=%d", cam_4_3, CAM_MODE);
             cam_4_3_last = cam_4_3;
 
             if(CAM_MODE != VR_720P50)
@@ -290,55 +298,47 @@ int HDZERO_detect() // return = 1: vtmg to V536 changed
     return ret;
 }
 
-#define AV_DET_CNT1  5
-#define AV_DET_CNT2  1
+#define AV_DET_CNT1  1
+#define AV_DET_CNT2  3
 int AV_in_detect() // return = 1: vtmg to V536 changed
 {
-    static uint8_t det_last = 0, det2_last = 0;
+    static int det_last = -1, det2_last = -1;
     static int det_cnt = 0, det2_cnt = 0;
-    uint8_t det, det2;
+    int det, det2;
     int ret = 0;
 
     pthread_mutex_lock(&hardware_mutex);
 
-    det = 0xAF & I2C_Read(ADDR_TP2825, 0x01);
+    det = I2C_Read(ADDR_TP2825, 0x01);
 
-    if(g_hw_stat.source_mode == HW_SRC_MODE_UI){ //detect in UI mode
-        det = (det == 0x2C) ? 2 : (det == 0x28) ? 1 : 0;
+    if(g_hw_stat.source_mode == HW_SRC_MODE_UI) { //detect in UI mode
+        TP2825_Set_Clamp(0);
+
+        det = ((det & 0x80) == 0x80) ? 0 : 1;
+        if(det_last != det) {
+            det_last = det;
+        }
+        else {
+            g_hw_stat.av_valid[g_hw_stat.av_chid] = det;
+            g_hw_stat.av_chid = g_hw_stat.av_chid ? 0 : 1;
+            TP2825_Switch_CH(g_hw_stat.av_chid);
+            det_last = -1;
+        }
+
+        det_cnt = det2_cnt = 0;
+    }
+    else if(g_hw_stat.source_mode == HW_SRC_MODE_AV) { //detect in AV_in/Module_bay mode
+        det &= 0xAF;
+        det2 = (g_hw_stat.av_pal == 1 && det == 0x2C) ? 2 :
+               (g_hw_stat.av_pal == 0 && det == 0x28) ? 1 : 0;
+        det  = (det == (g_hw_stat.av_pal ? 0x28 : 0x2C)) ? 1 : 0;
+
         if(det_last != det) {
             det_last = det;
             det_cnt = 0;
         }
         else if(det_cnt < AV_DET_CNT1) {
             det_cnt++;
-        }
-        else {
-            det_cnt = det_last = 0;
-            
-            g_hw_stat.av_valid[g_hw_stat.av_chid] = det;
-            
-            g_hw_stat.av_chid = g_hw_stat.av_chid ? 0 : 1;
-            TP2825_Switch_CH(g_hw_stat.av_chid);
-        }
-
-        det2_cnt = 0;
-    }
-    else if(g_hw_stat.source_mode == HW_SRC_MODE_AV) { //detect in AV_in/Module_bay mode
-        det2 = (g_hw_stat.av_pal == 1 && det == 0x2C) ? 2 :
-               (g_hw_stat.av_pal == 0 && det == 0x28) ? 1 : 0;
-
-        det  = (det == (g_hw_stat.av_pal ? 0x28 : 0x2C)) ? 1 : 0;
-
-        if(det_last != det) {
-            det_last = det;
-        }
-        else if(det){
-            g_hw_stat.av_pal = g_hw_stat.av_pal ? 0 : 1;
-            TP2825_Config(g_hw_stat.av_chid, g_hw_stat.av_pal);
-            AV_Mode_Switch(g_hw_stat.av_pal);
-
-            g_hw_stat.av_valid[g_hw_stat.av_chid] = 0;
-            det2_cnt = det2_last = det_last = 0;
         }
 
         if(det2_last != det2) {
@@ -348,14 +348,30 @@ int AV_in_detect() // return = 1: vtmg to V536 changed
         else if(det2_cnt < AV_DET_CNT2) {
             det2_cnt++;
         }
-        else {
-            if((g_hw_stat.av_valid[g_hw_stat.av_chid] == 0) && (det2 > 0))
-                ret = 1;
 
-            g_hw_stat.av_valid[g_hw_stat.av_chid] = det2;
+        if(g_hw_stat.av_valid[g_hw_stat.av_chid]) {
+            if(det2 == 0 && det2_cnt == AV_DET_CNT2) {
+                TP2825_Set_Clamp(0);
+                g_hw_stat.av_valid[g_hw_stat.av_chid] = 0;
+            }
         }
+        else {
+            if(det && det_cnt == AV_DET_CNT1) {
+                g_hw_stat.av_pal = g_hw_stat.av_pal ? 0 : 1;
+                TP2825_Config(g_hw_stat.av_chid, g_hw_stat.av_pal);
+                AV_Mode_Switch(g_hw_stat.av_pal);
+            }
 
-        det_cnt = 0;
+            if(det2_cnt == AV_DET_CNT2) {
+                if(det2){
+                    TP2825_Set_Clamp(1);
+                    g_hw_stat.av_valid[g_hw_stat.av_chid] = det2;
+                    ret = 1;
+                }
+                else
+                    TP2825_Set_Clamp(0);
+            }
+        }
     }
 
     pthread_mutex_unlock(&hardware_mutex);
@@ -366,44 +382,78 @@ void HDMI_in_detect()
 {
     static int vtmg_last = -1;
     static int cs_last = -1;
+    static int last_vld = 0;
     int vtmg, cs;
 
     pthread_mutex_lock(&hardware_mutex);
 
     if((g_hw_stat.source_mode == HW_SRC_MODE_UI) || (g_hw_stat.source_mode == HW_SRC_MODE_HDMIIN)) {
 
+        last_vld = g_hw_stat.hdmiin_valid;
         g_hw_stat.hdmiin_valid = IT66021_Sig_det();
 
-        if(g_hw_stat.hdmiin_valid && g_hw_stat.source_mode == HW_SRC_MODE_HDMIIN){
-            vtmg = IT66021_Get_VTMG();
-            if(vtmg_last != vtmg){
-                vtmg_last = vtmg;
-                Printf("IT66021: VTMG change: %d\n", vtmg);
+        if(g_hw_stat.source_mode == HW_SRC_MODE_HDMIIN){
+            if(g_hw_stat.hdmiin_valid){
+                vtmg = IT66021_Get_VTMG();
+                if(vtmg_last != vtmg){
+                    vtmg_last = vtmg;
+                    LOGI("IT66021: VTMG change: %d", vtmg);
 
-                OLED_display(0);
+                    OLED_display(0);
+                    I2C_Write(ADDR_FPGA, 0x8C, 0x00);
 
-                if(vtmg == 1){
-                    I2C_Write(ADDR_FPGA, 0x8d, 0x00);
-                    I2C_Write(ADDR_FPGA, 0x8e, 0x00);
-                    I2C_Write(ADDR_AL, 0x14, 0x00);
-                    OLED_SetTMG(0);
-                    OLED_display(1);
+                    if(vtmg == 1){
+                        system("dispw -s vdpo 1080p50");
+                        g_hw_stat.vdpo_tmg = HW_VDPO_1080P50;
+                        //I2C_Write(ADDR_FPGA, 0x8d, 0x10);
+                        I2C_Write(ADDR_FPGA, 0x8e, 0x80);
+                        I2C_Write(ADDR_AL, 0x14, 0x00);
+                        I2C_Write(ADDR_FPGA, 0x80, 0x00);
+                        
+                        OLED_SetTMG(0);
+
+                        I2C_Write(ADDR_FPGA, 0x8C, 0x04);
+                        OLED_display(1);
+                        g_hw_stat.hdmiin_vtmg = 1;
+                    }
+                    else if(vtmg == 2){
+                        system("dispw -s vdpo 720p30"); // 100fps actually
+                        g_hw_stat.vdpo_tmg = HW_VDPO_720P100;
+                        //I2C_Write(ADDR_FPGA, 0x8d, 0x04);
+                        I2C_Write(ADDR_FPGA, 0x8e, 0x80);
+                        I2C_Write(ADDR_AL, 0x14, 0x00);
+                        I2C_Write(ADDR_FPGA, 0x80, 0x80);
+                        
+                        OLED_SetTMG(1);
+
+                        I2C_Write(ADDR_FPGA, 0x8C, 0x04);
+                        OLED_display(1);
+                        g_hw_stat.hdmiin_vtmg = 2;
+                    }
                 }
-                else if(vtmg == 2){
-                    I2C_Write(ADDR_FPGA, 0x8d, 0x10);
-                    I2C_Write(ADDR_FPGA, 0x8e, 0x00);
-                    I2C_Write(ADDR_AL, 0x14, 0x01);
-                    OLED_SetTMG(1);
-                    OLED_display(1);
+
+                cs = IT66021_Get_PCLKFREQ();
+                if(cs > 0) {
+                    if(cs < 63)
+                        I2C_Write(ADDR_FPGA, 0x8d, 0x10);
+                    else
+                        I2C_Write(ADDR_FPGA, 0x8d, 0x04);
+                }
+
+                cs = IT66021_Get_CS();
+                if(cs_last != cs) {
+                    cs_last = cs;
+                    LOGI("IT66021: Color space change: %d\n", cs);
+
+                    IT66021_Set_CSMatrix(cs);
                 }
             }
+            else {
+                if(last_vld)
+                    I2C_Write(ADDR_FPGA, 0x06, 0x0F);
 
-            cs = IT66021_Get_CS();
-            if(cs_last != cs) {
-                cs_last = cs;
-                Printf("IT66021: Color space change: %d\n", cs);
-
-                IT66021_Set_CSMatrix(cs);
+                vtmg_last = -1;
+                cs_last = -1;
             }
         }
         else{

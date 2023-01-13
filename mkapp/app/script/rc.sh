@@ -43,12 +43,26 @@ aww 0x050967c0 0x110e6100
 
 #record process
 source /mnt/app//app/record/record-env.sh
-GLOG_minloglevel=3 /mnt/app/app/record/record & > /dev/null 2>&1
-/mnt/app/app/record/gogglecmd -rec startao
-
-#start applicaion
-#GLOG_minloglevel=3 /mnt/app/app/HDZGOGGLE &  > /dev/null 2>&1
-/mnt/app/app/HDZGOGGLE &
+if [ -e /mnt/extsd/RECORD.log ]; then
+	/mnt/app/app/record/record > /mnt/extsd/RECORD.log 2>&1 &
+else
+	/mnt/app/app/record/record &
+fi
+#/mnt/app/app/record/gogglecmd -rec startao
+/mnt/app/script/sdstat_log_backup.sh
+#/mnt/app/app/record/sdstat &
 
 #system led
 /mnt/app/script/system_daemon.sh &
+
+#start applicaion
+if [ -e /mnt/extsd/develop.sh ]; then
+	/mnt/extsd/develop.sh
+else
+	if [ -e /mnt/extsd/HDZGOGGLE.log ]; then
+		/mnt/app/app/HDZGOGGLE > /mnt/extsd/HDZGOGGLE.log 2>&1 &
+	else
+		#GLOG_minloglevel=3 /mnt/app/app/HDZGOGGLE &  > /dev/null 2>&1
+		/mnt/app/app/HDZGOGGLE &
+	fi
+fi

@@ -6,38 +6,49 @@
 #include <fcntl.h>
 #include <string.h>
 #include <pthread.h>
-#include "lvgl/lvgl.h"
-#include "self_test.h"
-#include "main_menu.h"
-#include "statusbar.h"
-#include "common.hh"
-#include "input_device.h"
-#include "osd.h"
-#include "thread.h"
-#include "imagesetting.h"
-#include "ht.h"
-#include "elrs.h"
-#include "../driver/hardware.h"
-#include "../driver/porting.h"
-#include "../driver/fans.h"
+
+#include <lvgl/lvgl.h>
+#include <minIni.h>
+
+#include "../bmi270/accel_gyro.h"
 #include "../driver/dm5680.h"
-#include "../driver/oled.h"
-#include "../driver/TP2825.h"
+#include "../driver/esp32.h"
+#include "../driver/fans.h"
+#include "../driver/hardware.h"
+#include "../driver/i2c.h"
 #include "../driver/it66021.h"
 #include "../driver/it66121.h"
 #include "../driver/mcp3021.h"
-#include "../driver/i2c.h"
-#include "../driver/esp32.h"
-#include "../page/page_scannow.h"
-#include "../page/page_power.h"
-#include "../page/page_source.h"
-#include "../minIni/minIni.h"
-#include "../bmi270/accel_gyro.h"
+#include "../driver/oled.h"
+#include "../driver/TP2825.h"
+#include "common.hh"
+#include "elrs.h"
+#include "ht.h"
+#include "input_device.h"
+#include "osd.h"
+#include "self_test.h"
 #include "thread.h"
+#include "thread.h"
+#include "ui/page_power.h"
+#include "ui/page_scannow.h"
+#include "ui/page_source.h"
+#include "ui/ui_image_setting.h"
+#include "ui/ui_main_menu.h"
+#include "ui/ui_porting.h"
+#include "ui/ui_statusbar.h"
 
 static void load_ini_setting(void)
 {
 	char str[128];
+	
+	FILE* fp;
+	fp=fopen("/mnt/UDISK/setting.ini","r");
+	if(fp){
+		fclose(fp);
+		sprintf(str,"cp -f /mnt/UDISK/setting.ini %s", SETTING_INI);
+		system(str); usleep(10);
+		system("rm /mnt/UDISK/setting.ini");
+	}
 
   	ini_gets("scan", "channel", "1", str, sizeof(str), SETTING_INI);
 	g_setting.scan.channel = atoi(str);
@@ -56,15 +67,17 @@ static void load_ini_setting(void)
 	g_setting.fans.right_speed = atoi(str);
 
   	ini_gets("autoscan", "status", "enable", str, sizeof(str), SETTING_INI);
-	if(strcmp(str, "enable") == 0)	
+	if(strcmp(str, "enable") == 0 || strcmp(str, "scan") == 0)
 	{
-		g_setting.autoscan.status = true;
+		g_setting.autoscan.status = 0;
+	}else if(strcmp(str, "disable") == 0 || strcmp(str, "last") == 0){
+		g_setting.autoscan.status = 1;
 	}else{
-		g_setting.autoscan.status = false;
+		g_setting.autoscan.status = 2;
 	}
-	g_setting.autoscan.source = ini_getl("autoscan", "source", 0, SETTING_INI);
-	g_setting.autoscan.last_source = ini_getl("autoscan", "last_source", 1, SETTING_INI);
-	
+	g_setting.autoscan.source = ini_getl("autoscan", "source", SETTING_SOURCE_LAST, SETTING_INI);
+	g_setting.autoscan.last_source = ini_getl("autoscan", "last_source", SETTING_SOURCE_HDZERO, SETTING_INI);
+
 	//power
   	ini_gets("power", "voltage", "35", str, sizeof(str), SETTING_INI);
 	g_setting.power.voltage = atoi(str);
@@ -158,47 +171,46 @@ return NULL;
 void start_running(void)
 {
 	int source;
-	if(g_setting.autoscan.source == 0) 
+	if(g_setting.autoscan.source == SETTING_SOURCE_LAST)
 		source = g_setting.autoscan.last_source;
 	else
 		source = g_setting.autoscan.source;
-		
-	if(source == 1) {//HDZero
-		g_source_info.source = 0;
+
+	if(source == SETTING_SOURCE_HDZERO) {//HDZero
+		g_source_info.source = SOURCE_HDZERO;
 		HDZero_open();
-		if(g_setting.autoscan.status) {//autoscan =1
-			/* //Auto scan Disabled per request 
+		if(g_setting.autoscan.status == SETTING_AUTOSCAN_SCAN) {
 			pthread_t pid;
 			g_autoscan_exit = false;
 			pthread_create(&pid,NULL,thread_autoscan,NULL);
-			*/
-			g_source_info.source = 0;
-			g_menu_op = OPLEVEL_MAINMENU;
 		}
-		else{ //auto scan disabled, go directly to last saved channel
+		else if(g_setting.autoscan.status == SETTING_AUTOSCAN_LAST) {
 			g_menu_op = OPLEVEL_VIDEO;
 			switch_to_video(true);
+		}
+		else{ //auto scan disabled, go to go directly to last saved channel
+			g_menu_op = OPLEVEL_MAINMENU;
 		}
 	}
 	else {
 		g_menu_op = OPLEVEL_VIDEO;
-		if(source == 2) {//module Bay
+		if(source == SETTING_SOURCE_EXPANSION) {//module Bay
 			switch_to_analog(1);
-			g_source_info.source = 3;
+			g_source_info.source = SOURCE_EXPANSION;
 		}
-		else if(source == 3) {//AV in
+		else if(source == SETTING_SOURCE_AV_IN) {//AV in
 			switch_to_analog(0);
-			g_source_info.source = 2;
+			g_source_info.source = SOURCE_AV_IN;
 		}
 		else { //HDMI in
 			sleep(2);
 			g_source_info.hdmi_in_status = IT66021_Sig_det();
 			if(g_source_info.hdmi_in_status) {
-				Source_HDMI_in();
-				g_source_info.source = 1;
+				switch_to_hdmiin();
+				g_source_info.source = SOURCE_HDMI_IN;
 			}
 			else {
-				g_source_info.source = 0;
+				g_source_info.source = SOURCE_HDZERO;
 				g_menu_op = OPLEVEL_MAINMENU;
 			}
 		}
@@ -221,8 +233,6 @@ static void device_init(void)
 	g_battery.type = 2;
 	DM5680_req_ver(); 
 	fans_top_setspeed(g_setting.fans.top_speed);
-	fans_left_setspeed(g_setting.fans.left_speed);
-	fans_right_setspeed(g_setting.fans.right_speed);
 }
 
 
@@ -248,14 +258,8 @@ int main(int argc, char* argv[])
 	main_menu_init();
 	statusbar_init();
 	lv_timer_handler();
+	input_device_init(); 
 	
-	g_menu_op = OPLEVEL_MAINMENU;
-	input_device_open(); 
-	{
-		pthread_t pid;
-		pthread_create(&pid,NULL,thread_dialpad,NULL);
-	}
-
 	iic_init();
 	OLED_Startup();
 	Display_UI_init();

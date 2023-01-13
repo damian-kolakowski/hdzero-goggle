@@ -13,6 +13,7 @@
 #define HW_VDPO_720P60      1
 #define HW_VDPO_720P90      2
 #define HW_VDPO_1080P50     3
+#define HW_VDPO_720P100     4
 
 typedef struct{
     int source_mode; // 0=UI; 1=HDZERO; 2=AV_in/Module_bay; 3=HDMI in
@@ -29,6 +30,7 @@ typedef struct{
 
     // hdmi in
     int hdmiin_valid;
+    int hdmiin_vtmg; //1=1080p,2=720p
 
 } hw_status_t;
 

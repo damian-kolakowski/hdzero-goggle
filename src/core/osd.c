@@ -1,4 +1,5 @@
 #include "osd.h"
+
 #include <stdio.h>
 #include <stdint.h>
 #include <unistd.h>
@@ -9,19 +10,22 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <sys/time.h>
+
+#include <lvgl/lvgl.h>
+#include <log/log.h>
+#include <minIni.h>
+
 #include "common.hh"
-#include "lvgl/lvgl.h"
 #include "msp_displayport.h"
 #include "../driver/mcp3021.h"
 #include "../driver/nct75.h"
-#include "../page/page_common.h"
-#include "../page/page_fans.h"
+#include "ui/page_common.h"
+#include "ui/page_fans.h"
 #include "../driver/dm5680.h"
 #include "../driver/hardware.h"
 #include "fbtools.h"
-#include "../minIni/minIni.h"
 #include "../driver/fans.h"
-#include "../core/imagesetting.h"
+#include "ui/ui_image_setting.h"
 
 //////////////////////////////////////////////////////////////////
 //Global
@@ -49,7 +53,7 @@ void confirm_recording()
 		if(fp) {
 			fscanf(fp,"%d",&ret);
 			fclose(fp);
-			//printf("SD card %d\n",ret);
+			//LOGI("SD card %d",ret);
 		}
 		if(ret != 1)
 			osd_rec_update(false);
@@ -95,7 +99,7 @@ void update_record_conf()
 	else
 		ini_puts("record", "type", "mp4", REC_CONF);
 
-	if(g_source_info.source == 0) {
+	if(g_source_info.source == SOURCE_HDZERO) {
 		if(CAM_MODE == VR_540P90 || CAM_MODE == VR_540P90_CROP) {  //90fps
 			ini_putl("venc", "fps", 90,    REC_CONF);
 			ini_putl("venc", "kbps",34000, REC_CONF);
@@ -135,7 +139,7 @@ void rbtn_click(bool is_short, int mode)
 {
 	bool start_rec;
 	
-	Printf("rbtn_click: sdcard=%d, recording=%d, mode=%d\n",g_sdcard_enable,is_recording,mode);
+	LOGI("rbtn_click: sdcard=%d, recording=%d, mode=%d",g_sdcard_enable,is_recording,mode);
 
 	if(is_short) { // short press right button
 		if(!g_sdcard_enable) return;
@@ -193,11 +197,8 @@ void osd_llock_show(bool bShow)
 		return;
 	}
 	
-	if(g_latency_locked) {
-		sprintf(buf,"%s%s",RESOURCE_PATH,LLOCK_bmp);
-    	lv_img_set_src(g_osd_hdzero.latency_lock, buf);
+	if(g_latency_locked)
 		lv_obj_clear_flag(g_osd_hdzero.latency_lock, LV_OBJ_FLAG_HIDDEN);
-	}
 	else 
 		lv_obj_add_flag(g_osd_hdzero.latency_lock, LV_OBJ_FLAG_HIDDEN);
 }
@@ -350,7 +351,7 @@ static void create_osd_object(lv_obj_t **obj, const char *img, int index)
 	if(index < 5) 
 		x = 40*index+160;
 	else
-		x = 1120 - (11-index)*40;
+		x = 1080 - (11-index)*40;
 
 	lv_obj_set_pos(*obj, x, 0);
 }
@@ -359,7 +360,7 @@ static void create_osd_object(lv_obj_t **obj, const char *img, int index)
 void osd_show(bool show)
 {
 	if(show)
-		lv_obj_clear_flag(scr_osd, LV_OBJ_FLAG_HIDDEN);
+			lv_obj_clear_flag(scr_osd, LV_OBJ_FLAG_HIDDEN);
 	else	
 		lv_obj_add_flag(scr_osd, LV_OBJ_FLAG_HIDDEN);
 }
@@ -382,8 +383,8 @@ uint8_t RSSI2Ant(uint8_t rssi)
 void osd_hdzero_update(void)
 {
 	char buf[128],i;
-	bool showRXOSD = g_showRXOSD && (g_source_info.source == 0);
-	
+	bool showRXOSD = g_showRXOSD && (g_source_info.source == SOURCE_HDZERO);
+
 	osd_battery_show();
 	osd_rec_show(g_showRXOSD);
 	osd_llock_show(g_showRXOSD);
@@ -480,7 +481,7 @@ static void embedded_osd_init(void)
 	sprintf(buf,"%s%s",RESOURCE_PATH,VrxTemp7_gif);
 	create_osd_object(&g_osd_hdzero.vrx_temp, buf, 3);
 
-	sprintf(buf,"%s%s",RESOURCE_PATH,VrxTemp7_gif);
+	sprintf(buf,"%s%s",RESOURCE_PATH,LLOCK_bmp);
 	create_osd_object(&g_osd_hdzero.latency_lock, buf, 4);
 		
 	g_osd_hdzero.ch = lv_label_create(scr_osd);
@@ -578,7 +579,7 @@ int load_fc_osd_font_bmp(const char *file)
 	int boundry_width;
 	int line_size;
 
-	Printf("load_fc_osd_font_bmp: %s...", file);
+	LOGI("load_fc_osd_font_bmp: %s...", file);
 	fd = open(file, O_RDONLY);
 	if(fd < 0) return -1;
 	
@@ -665,11 +666,11 @@ void load_fc_osd_font(void)
 	{
 		if(!load_fc_osd_font_bmp(fp[i]))
 		{
-			Printf(" succecss!\n");
+			LOGI(" succecss!");
 			return;
 		}
 		else
-			Printf(" failed!\n");
+			LOGE(" failed!");
 	}
 }
 ///////////////////////////////////////////////////////////////////////////////

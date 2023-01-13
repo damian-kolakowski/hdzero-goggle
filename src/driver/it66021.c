@@ -1,12 +1,16 @@
+#include "it66021.h"
+
 #include <stdint.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+
+#include <log/log.h>
+
 #include "defines.h"
 #include "i2c.h"
 #include "oled.h"
 #include "dm5680.h"
-#include "it66021.h"
 #include "../core/common.hh"
 
 #define ADDR_IT66021_RING  0x70
@@ -39,7 +43,7 @@ void IT66021_OscCalib()
 
     // oscdiv
     val = (val + 500000) / 1000000; //oscdiv
-    Printf("IT66021: OSCCLK = %d,  oscdiv = %d\n", OSCCLK, val);
+    LOGI("IT66021: OSCCLK = %d,  oscdiv = %d", OSCCLK, val);
 
     val <<= 4;
     IT66021_Mask_WR(1, 0x01, 0x70, val & 0x70);
@@ -260,4 +264,15 @@ void IT66021_Set_CSMatrix(int cs)
     else{
         IT66021_Mask_WR(0, 0x65, 0x03, 0x00);
     }
+}
+
+int IT66021_Get_PCLKFREQ()
+{
+    int rdat;
+    
+    rdat = I2C_L_Read(ADDR_IT66021, 0x9A);
+    if(rdat != I2C_L_Read(ADDR_IT66021, 0x9A))
+        rdat = 0;
+
+    return rdat;
 }

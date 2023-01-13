@@ -1,3 +1,5 @@
+#include "elrs.h"
+
 #include <pthread.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -13,19 +15,19 @@
 #include <stdlib.h>
 #include <semaphore.h>
 
+#include <log/log.h>
 
 #include "common.hh"
 #include "hardware.h"
-#include "elrs.h"
 #include "osd.h"
 
 #include "../driver/uart.h"
 #include "../driver/dm5680.h"
 #include "../driver/mcp3021.h"
 
-#include "../page/page_common.h"
-#include "../page/page_scannow.h"
-#include "../page/page_version.h"
+#include "ui/page_common.h"
+#include "ui/page_scannow.h"
+#include "ui/page_version.h"
 
 static mspState_e  input_state;
 static uint16_t    offset;
@@ -175,7 +177,7 @@ bool esp32_handler_process_byte(uint8_t c)
                 msp_process_packet();
             }
             else {
-                Printf("CRC failure on MSP packet - Got %d expected %d", c, crc);
+                LOGE("CRC failure on MSP packet - Got %d expected %d", c, crc);
             }
 			input_state = MSP_IDLE;
             break;
@@ -186,7 +188,7 @@ bool esp32_handler_process_byte(uint8_t c)
     }
 
     if (processed_byte || input_state != MSP_IDLE) {
-		// Printf("Processed %02x %d\n", c, input_state);
+		// LOGI("Processed %02x %d", c, input_state);
         return true;
     }
     return false;
@@ -218,7 +220,7 @@ void msp_process_packet()
 			case MSP_SET_BAND_CHAN:
 				{
 					uint8_t chan = packet.payload[0];
-					if (g_source_info.source == 0) {	// HDZero mode
+					if (g_source_info.source == SOURCE_HDZERO) {	// HDZero mode
 						chan = chan < 48 ? channel_map[chan] : 0;
 						if (chan != 0 && (chan != g_setting.scan.channel || g_menu_op != OPLEVEL_VIDEO)) {
 							g_setting.scan.channel = chan;
@@ -242,7 +244,7 @@ void msp_process_packet()
 			case MSP_SET_FREQ:
 				{
 					uint16_t freq = packet.payload[0] | (uint16_t)packet.payload[1] << 8;
-					if (g_source_info.source == 0) {	// HDZero mode
+					if (g_source_info.source == SOURCE_HDZERO) {	// HDZero mode
 						for (int i=0 ; i<10 ; i++) {
 							int chan = i+1;
 							if (freq == freq_table[i] && (g_setting.scan.channel != chan || g_menu_op != OPLEVEL_VIDEO) && chan>0 && chan<11) {
@@ -316,11 +318,23 @@ void msp_process_packet()
 	}
 }
 
+bool msp_read_resposne(uint16_t function, uint16_t *payload_size, uint8_t *payload)
+{
+	if (sem_trywait(&response_semaphore))
+		return false;
+	if (response_packet.function != function)
+		return false;
+	uint16_t size = response_packet.payload_size < *payload_size ? response_packet.payload_size : *payload_size;
+	memcpy(payload, response_packet.payload, size);
+	*payload_size = size;
+	return true;
+}
+
 bool msp_await_resposne(uint16_t function, uint16_t payload_size, uint8_t *payload, uint32_t timeout_ms)
 {
 	struct timespec ts;
 	if (clock_gettime(CLOCK_REALTIME, &ts) == -1) {
-		Printf("clock_gettime failed");
+		LOGE("clock_gettime failed");
 		return false;
 	}
 
@@ -349,6 +363,7 @@ void msp_send_packet(uint16_t function, mspPacketType_e type, uint16_t payload_s
 	uint8_t buffer[16] = {'$', 'X', type, 0x00, function & 0xFF, function >> 8, payload_size & 0xFF, payload_size >> 8};
     memcpy(buffer + 8, payload, payload_size);
 	uint8_t crc = 0;
+	while(!sem_trywait(&response_semaphore));
 	for (int i=3 ; i<payload_size + 8 ; i++)
 		crc = msp_crc8_dvb_s2(crc, buffer[i]);
 	buffer[payload_size + 8] = crc;
